@@ -6,68 +6,73 @@ import jdk.incubator.vector.VectorMask;
 import jdk.incubator.vector.VectorSpecies;
 
 import java.io.IOException;
+import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
 import static jdk.incubator.vector.VectorOperators.*;
 
 public class Utf8 {
-  public static boolean scalarValidUtf8(int pos, byte[] byteArray) {
+  public static boolean scalarValidUtf8(int pos, MemorySegment ms, int len) {
     int codePoint = 0;
     int nextPos;
-    while (pos < byteArray.length) {
-        int byteVal = byteArray[pos] & 0xff;
+    while (pos < len) {
+        int byteVal = ms.getAtIndex(ValueLayout.JAVA_BYTE, pos) & 0xff;
 
         while (byteVal < 0b10000000) {
-            if (++pos == byteArray.length) {
+            if (++pos == len) {
                 return true;
             }
-            byteVal = byteArray[pos] & 0xff;
+            byteVal = ms.getAtIndex(ValueLayout.JAVA_BYTE, pos) & 0xff;
         }
 
         if ((byteVal & 0b11100000) == 0b11000000) {
             nextPos = pos + 2;
-            if (nextPos > byteArray.length) {
+            if (nextPos > len) {
                 return false;
             }
-            if ((byteArray[pos + 1] & 0b11000000) != 0b10000000) {
+            if ((ms.getAtIndex(ValueLayout.JAVA_BYTE, pos + 1) & 0b11000000) != 0b10000000) {
                 return false;
             }
             // Range check
-            codePoint = ((byteVal & 0b00011111) << 6) | (byteArray[pos + 1] & 0b00111111);
+            codePoint = ((byteVal & 0b00011111) << 6) | (ms.getAtIndex(ValueLayout.JAVA_BYTE, pos + 1) & 0b00111111);
             if ((codePoint < 0x80) || (0x7ff < codePoint)) {
                 return false;
             }
         } else if ((byteVal & 0b11110000) == 0b11100000) {
             nextPos = pos + 3;
-            if (nextPos > byteArray.length) {
+            if (nextPos > len) {
                 return false;
             }
-            if ((byteArray[pos + 1] & 0b11000000) != 0b10000000 || (byteArray[pos + 2] & 0b11000000) != 0b10000000) {
+            if ((ms.getAtIndex(ValueLayout.JAVA_BYTE, pos + 1) & 0b11000000) != 0b10000000
+                    || (ms.getAtIndex(ValueLayout.JAVA_BYTE, pos + 2) & 0b11000000) != 0b10000000) {
                 return false;
             }
             // Range check
             codePoint = ((byteVal & 0b00001111) << 12)
-                    | ((byteArray[pos + 1] & 0b00111111) << 6)
-                    | (byteArray[pos + 2] & 0b00111111);
+                    | ((ms.getAtIndex(ValueLayout.JAVA_BYTE, pos + 1) & 0b00111111) << 6)
+                    | (ms.getAtIndex(ValueLayout.JAVA_BYTE, pos + 2) & 0b00111111);
             if ((codePoint < 0x800) || (0xffff < codePoint) || (0xd7ff < codePoint && codePoint < 0xe000)) {
                 return false;
             }
         } else if ((byteVal & 0b11111000) == 0b11110000) {
             nextPos = pos + 4;
-            if (nextPos > byteArray.length) {
+            if (nextPos > len) {
                 return false;
             }
-            if ((byteArray[pos + 1] & 0b11000000) != 0b10000000
-                    || (byteArray[pos + 2] & 0b11000000) != 0b10000000
-                    || (byteArray[pos + 3] & 0b11000000) != 0b10000000) {
+            if ((ms.getAtIndex(ValueLayout.JAVA_BYTE, pos + 1) & 0b11000000) != 0b10000000
+                    || (ms.getAtIndex(ValueLayout.JAVA_BYTE, pos + 2) & 0b11000000) != 0b10000000
+                    || (ms.getAtIndex(ValueLayout.JAVA_BYTE, pos + 3) & 0b11000000) != 0b10000000) {
                 return false;
             }
             // Range check
             codePoint = ((byteVal & 0b00000111) << 18)
-                    | ((byteArray[pos + 1] & 0b00111111) << 12)
-                    | ((byteArray[pos + 2] & 0b00111111) << 6)
-                    | (byteArray[pos + 3] & 0b00111111);
+                    | ((ms.getAtIndex(ValueLayout.JAVA_BYTE, pos + 1) & 0b00111111) << 12)
+                    | ((ms.getAtIndex(ValueLayout.JAVA_BYTE, pos + 2) & 0b00111111) << 6)
+                    | (ms.getAtIndex(ValueLayout.JAVA_BYTE, pos + 3) & 0b00111111);
             if (codePoint <= 0xffff || 0x10ffff < codePoint) {
                 return false;
             }
@@ -82,7 +87,7 @@ public class Utf8 {
   /**
    * Returns true if buf is valid UTF-8.
    */
-  public static boolean validate(byte[] buf, LookupTables lut) {
+  public static boolean validate(MemorySegment ms, int len, LookupTables lut) {
     VectorSpecies<Byte> species = lut.species();
     ByteVector isIncompleteAnd = lut.isIncompleteAnd();
     ByteVector isIncompleteEq = lut.isIncompleteEq();
@@ -100,8 +105,8 @@ public class Utf8 {
     ByteVector prevInputBlock = ByteVector.zero(species);
 
     int i = 0;
-    for (; i < species.loopBound(buf.length); i += species.length()) {
-      ByteVector input = ByteVector.fromArray(species, buf, i);
+    for (; i < species.loopBound(len); i += species.length()) {
+      ByteVector input = ByteVector.fromMemorySegment(species, ms, i, ByteOrder.nativeOrder());
 
       /*
       Short-circuit if the entire vector is Ascii; we know since the MSB of an
@@ -131,7 +136,7 @@ public class Utf8 {
     }
     // if we did no SIMD processing, call the scalar routine
     if(i == 0) {
-      return scalarValidUtf8(0, buf);
+      return scalarValidUtf8(0, ms, len);
     }
     // if we caught an error, it ends there.
     if (!error.test(IS_DEFAULT).allTrue()) {
@@ -141,7 +146,7 @@ public class Utf8 {
     // go back to the last complete char
     boolean foundLeadingBytes = false;
     for (int j = 0; j <= 3; j++) {
-      byte candidateByte = buf[i - j];
+      byte candidateByte = ms.getAtIndex(ValueLayout.JAVA_BYTE, i - j);
       foundLeadingBytes = (candidateByte & 0b11000000) != 0b10000000;
       if (foundLeadingBytes) {
         i -= j;
@@ -151,7 +156,7 @@ public class Utf8 {
     if (!foundLeadingBytes) {
       return false;
     }
-    return scalarValidUtf8(i, buf);
+    return scalarValidUtf8(i, ms, len);
   }
 
   /**
@@ -200,7 +205,8 @@ public class Utf8 {
   public static void main(String[] args) throws IOException {
     LookupTables luts = new LookupTablesPreferred();
 
-    byte[] buf;
+    byte[] bytes;
+    ByteBuffer buf;
 
     if (args.length == 0) {
       String[] resources = {
@@ -210,16 +216,26 @@ public class Utf8 {
           "20k.txt"
       };
       for (String resource : resources) {
-        buf = Utf8.class.getResourceAsStream("/" + resource).readAllBytes();
-        System.out.println(resource + ": " + validate(buf, luts));
+        bytes = Utf8.class.getResourceAsStream("/" + resource).readAllBytes();
+        buf = ByteBuffer.allocateDirect(bytes.length + 64).alignedSlice(64);
+        buf.put(bytes);
+        ByteBuffer sliced = buf.slice(0, bytes.length);
+        MemorySegment ms = MemorySegment.ofBuffer(sliced);
+        System.out.println(resource + ": " + validate(ms, bytes.length, luts));
       }
 
     } else {
       for (String path : args) {
-        buf = Files.readAllBytes(Path.of(path));
-        System.out.println(path + ": " + validate(buf, luts));
+        bytes = Files.readAllBytes(Path.of(path));
+        buf = ByteBuffer.allocateDirect(bytes.length + 64).alignedSlice(64);
+        buf.put(bytes);
+        ByteBuffer sliced = buf.slice(0, bytes.length);
+        MemorySegment ms = MemorySegment.ofBuffer(sliced);
+        System.out.println(path + ": " + validate(ms, bytes.length, luts));
       }
     }
   }
+
+
 
 }

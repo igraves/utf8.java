@@ -80,8 +80,15 @@ THE POSSIBILITY OF SUCH DAMAGE.
                 <artifactId>maven-compiler-plugin</artifactId>
                 <version>3.8.0</version>
                 <configuration>
-			 <source>22</source>
-			<target>22</target>
+			 <source>25</source>
+			<target>25</target>
+                    <annotationProcessorPaths>
+                        <path>
+                            <groupId>org.openjdk.jmh</groupId>
+                            <artifactId>jmh-generator-annprocess</artifactId>
+                            <version>${jmh.version}</version>
+                        </path>
+                    </annotationProcessorPaths>
                     <compilerArgs>
 			<compilerArg>--enable-preview</compilerArg>
 			<compilerArg>--add-modules</compilerArg>

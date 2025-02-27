@@ -3,7 +3,11 @@ package com.augustnagro.utf8;
 import org.openjdk.jmh.annotations.*;
 
 import java.io.IOException;
+import java.lang.foreign.MemorySegment;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 
 @BenchmarkMode(Mode.Throughput)
 @State(Scope.Benchmark)
@@ -25,17 +29,24 @@ public class BenchJDK {
   @Param({"/twitter.json"}) // the following could be added to the list: {"/utf8-demo.txt", "/utf8-demo-invalid.txt", "/20k.txt"}
   String testFile;
 
-  byte[] buf;
+  byte[] bytes;
+  MemorySegment ms;
+  int len;
 
   @Setup
   public void setup() throws IOException {
-    buf = getClass().getResourceAsStream(testFile).readAllBytes();
+    bytes = getClass().getResourceAsStream(testFile).readAllBytes();
+    len = bytes.length;
+    ByteBuffer buf = ByteBuffer.allocateDirect(bytes.length + 128).alignedSlice(64);
+    buf.put(bytes);
+    ByteBuffer sliced = buf.slice(0, bytes.length);
+    ms = MemorySegment.ofBuffer(sliced);
   }
 
   @Benchmark
   public boolean jdk() {
     try {
-      new String(buf, StandardCharsets.UTF_8);
+      new String(bytes, StandardCharsets.UTF_8);
       return true;
     } catch (Exception e) {
       return false;
@@ -44,22 +55,22 @@ public class BenchJDK {
 
   @Benchmark
   public boolean scalar() {
-    return Utf8.scalarValidUtf8(0, buf);
+    return Utf8.scalarValidUtf8(0, ms, len);
   }
 
   @Benchmark
   public boolean vector_512() {
-    return Utf8.validate(buf, LUTS_512);
+    return Utf8.validate(ms, len, LUTS_512);
   }
 
   @Benchmark
   public boolean vector_256() {
-    return Utf8.validate(buf, LUTS_256);
+    return Utf8.validate(ms, len, LUTS_256);
   }
 
   @Benchmark
   public boolean vector_128() {
-    return Utf8.validate(buf, LUTS_128);
+    return Utf8.validate(ms, len, LUTS_128);
   }
 
 }
